@@ -11,6 +11,19 @@ path `{source_file_path}__zarr/{experiment_name}.json`. Because UCLALES writes
 files in NetCDF3 format each source file will be convered to NetCDF4 (written
 to `{source_file_path}__zarr/nc4`).
 
+This can then be loaded in python with
+
+```python
+import uclales_zarr
+
+source_file_path = "{change this}"
+experiment_name = "{change this}"
+
+ds = uclales_zarr.load(f"{source_file_path}__zarr/{experiment_name}.json")
+# `ds` is now a regular xr.Dataset you can use to access the full simulation
+# data as if it is a single file
+```
+
 ## Implementation progress
 
 - [x] conversion to NetCDF4 from NetCDF3 (may be able to use NetCDF3 natively
