@@ -10,8 +10,8 @@ import fsspec.implementations.dirfs
 import ujson  # fast json
 import xarray as xr
 from dask.diagnostics import ProgressBar
-from kerchunk.hdf import SingleHdf5ToZarr
 from kerchunk.combine import MultiZarrToZarr
+from kerchunk.hdf import SingleHdf5ToZarr
 from loguru import logger
 from tqdm.auto import tqdm
 
