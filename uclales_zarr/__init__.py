@@ -1,1 +1,1 @@
-from .load import load_zarr
+from .load_zarr import load
