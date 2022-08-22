@@ -35,9 +35,9 @@ ds = uclales_zarr.load(f"{source_file_path}__zarr/{experiment_name}.json")
 
 - [ ] support for creating coordinate values for staggered fields (velocities)
 
-- [ ] support for 2D cross-section fields
+- [x] support for 2D cross-section fields
 
-- [ ] try natively using NetCDF3 rather than converting, this appears to be
+- [x] try natively using NetCDF3 rather than converting, this appears to be
   possible now with `ffspec` `0.0.7`
   (https://github.com/fsspec/kerchunk/pull/190) although there might be
   degradation in access speeds.
