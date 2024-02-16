@@ -29,7 +29,7 @@ def _drop_nonsplit_dims(dims):
     return [d for d in dims if d != "time" and not d.startswith("z")]
 
 
-def filter_chunks(refs, concat_dims):
+def _filter_chunks(refs, concat_dims):
     vars_to_keep = []
 
     for key, values in refs["refs"].items():
@@ -85,7 +85,7 @@ def _create_singlefile_zarr_jsons(path_src_jsons, fps_nc_files, is_netcdf4, subs
 
             refs = h5chunks.translate()
             # TODO: filter refs by subset
-            filtered_refs = filter_chunks(refs=refs, concat_dims=subset)
+            filtered_refs = _filter_chunks(refs=refs, concat_dims=subset)
             with fs.open(outf, "wb") as f:
                 f.write(ujson.dumps(filtered_refs).encode())
             return Path(fs.path) / outf
@@ -137,7 +137,7 @@ def _find_source_files(fp_source_data, data_kind, exp_name):
         fps_src = list(fp_source_data.glob(f"{exp_name}.000[0-1]000[0-2].nc"))
     elif data_kind in ["xy", "xz", "yz"]:
         fps_src = list(fp_source_data.glob(f"{exp_name}.out.{data_kind}.????.????.nc"))
-    elif data_kind == "xy__first_10x10":
+    elif data_kind == "xy__first_2x3":
         fps_src = list(fp_source_data.glob(f"{exp_name}.out.xy.000[0-1].000[0-2].nc"))
     else:
         raise NotImplementedError(data_kind)
@@ -147,14 +147,19 @@ def _find_source_files(fp_source_data, data_kind, exp_name):
     return fps_src
 
 
-def main(fp_source_data, exp_name, data_kind):
-    fp_source_data = Path(fp_source_data, data_kind=data_kind)
-    fp_dest_data = fp_source_data.parent / (fp_source_data.name + "__zarr")
+def _create_multizarr(exp_name, data_kind, fp_dest_data, fp_source_data, subset):
+    fp_dest_json = fp_dest_data / f"{exp_name}.{data_kind}.{_subset_id(subset)}.json"
 
+    if fp_dest_json.exists():
+        logger.info(f"Skipping creation of {fp_dest_json} as it already exists")
+        return fp_dest_json
+
+    # filepaths for source netcdf files
     fps_src = _find_source_files(
         fp_source_data=fp_source_data, data_kind=data_kind, exp_name=exp_name
     )
 
+    # where to place jsons for individual source files
     dirname_src_jsons = f"src_jsons__{data_kind}"
     fp_src_jsons = fp_dest_data / dirname_src_jsons
 
@@ -164,6 +169,31 @@ def main(fp_source_data, exp_name, data_kind):
     except OSError:
         is_netcdf4 = False
 
+    fps_src_jsons = _create_singlefile_zarr_jsons(
+        path_src_jsons=fp_src_jsons,
+        fps_nc_files=fps_src,
+        is_netcdf4=is_netcdf4,
+        subset=subset,
+    )
+
+    fps_src_jsons = sorted(fps_src_jsons)
+
+    # check we can open one of the single-file jsons without issue
+    _open_single_json(filepath=fps_src_jsons[0])
+
+    _multizarr_to_zarr(
+        json_single_fps=[str(fp) for fp in fps_src_jsons],
+        dest_fpath_json=fp_dest_json,
+        concat_dims=subset,
+    )
+
+    return fp_dest_json
+
+
+def main(fp_source_data, exp_name, data_kind):
+    fp_source_data = Path(fp_source_data, data_kind=data_kind)
+    fp_dest_data = fp_source_data.parent / (fp_source_data.name + "__zarr")
+
     if data_kind.startswith("3d"):
         subsets = [("xt", "yt"), ("xt", "ym"), ("xm", "yt")]
     else:
@@ -171,23 +201,12 @@ def main(fp_source_data, exp_name, data_kind):
 
     datasets = []
     for subset in tqdm(subsets, desc="Creating zarr files"):
-        fps_src_jsons = _create_singlefile_zarr_jsons(
-            path_src_jsons=fp_src_jsons,
-            fps_nc_files=fps_src,
-            is_netcdf4=is_netcdf4,
+        fp_dest_json = _create_multizarr(
+            exp_name=exp_name,
+            data_kind=data_kind,
+            fp_dest_data=fp_dest_data,
+            fp_source_data=fp_source_data,
             subset=subset,
-        )
-
-        fps_src_jsons = sorted(fps_src_jsons)
-
-        # check we can open one of the single-file jsons without issue
-        _open_single_json(filepath=fps_src_jsons[0])
-
-        fp_dest_json = fp_dest_data / f"{exp_name}.{subset}.json"
-        _multizarr_to_zarr(
-            json_single_fps=[str(fp) for fp in fps_src_jsons],
-            dest_fpath_json=fp_dest_json,
-            concat_dims=subset,
         )
 
         # attempt to read the final json-file which describes all the source netcdf files
