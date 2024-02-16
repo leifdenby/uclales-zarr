@@ -4,6 +4,7 @@
 from pathlib import Path
 
 import dask
+import dask.bag
 import fsspec
 import fsspec.implementations
 import fsspec.implementations.dirfs
@@ -101,9 +102,8 @@ def _create_singlefile_zarr_jsons(path_src_jsons, fps_nc_files, is_netcdf4, subs
             return Path(fs.path) / outf
 
     files = fps_nc_files
-    json_single_fps = dask.compute(
-        *[dask.delayed(gen_json)(u) for u in files], retries=10
-    )
+    bag = dask.bag.from_sequence(files, npartitions=len(files)).map(gen_json)
+    json_single_fps = bag.compute()
     return json_single_fps
 
 
