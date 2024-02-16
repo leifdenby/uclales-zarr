@@ -66,6 +66,16 @@ def _filter_chunks(refs, concat_dims):
     return filtered_refs
 
 
+def _fix_time_units(refs):
+    # fix time units, UCLALES prior to https://github.com/leifdenby/uclales/commit/a48f4302aa33711c65e32c2ec5b481b1ac2d2ce8
+    # didn't have valid CF time units
+    if "time/.zattrs" in refs["refs"]:
+        time_attrs = ujson.loads(refs["refs"]["time/.zattrs"])
+        if time_attrs["units"] == "seconds since 2000-00-00 0000":
+            time_attrs["units"] = "seconds since 2000-01-01 00:00:00"
+            refs["refs"]["time/.zattrs"] = ujson.dumps(time_attrs)
+
+
 def _create_singlefile_zarr_jsons(path_src_jsons, fps_nc_files, is_netcdf4, subset):
     logger.info("Creating JSON file for each individual source NetCDF file")
     path_src_jsons = Path(path_src_jsons)
@@ -84,8 +94,8 @@ def _create_singlefile_zarr_jsons(path_src_jsons, fps_nc_files, is_netcdf4, subs
             outf = f"{fp.name}.{_subset_id(subset)}.json"
 
             refs = h5chunks.translate()
-            # TODO: filter refs by subset
             filtered_refs = _filter_chunks(refs=refs, concat_dims=subset)
+            _fix_time_units(filtered_refs)
             with fs.open(outf, "wb") as f:
                 f.write(ujson.dumps(filtered_refs).encode())
             return Path(fs.path) / outf
@@ -103,7 +113,7 @@ def _open_single_json(filepath):
         fo=str(filepath),
     )
 
-    ds = xr.open_dataset(m, engine="zarr", decode_times=False, consolidated=False)
+    ds = xr.open_dataset(m, engine="zarr", consolidated=False)
     return ds
 
 
@@ -124,9 +134,7 @@ def _read_multizarr(rpath):
         fo=str(rpath),
     )
     m = fs.get_mapper("")
-    ds = xr.open_dataset(
-        m, engine="zarr", decode_times=False, chunks={}, consolidated=False
-    )
+    ds = xr.open_dataset(m, engine="zarr", chunks={}, consolidated=False)
     return ds
 
 
