@@ -21,22 +21,52 @@ from tqdm.auto import tqdm
 ProgressBar().register()
 
 
-def _convert_nc3_to_nc4(fps_src, dest_path):
-    logger.info("Creating netcdf4 files from netcdf3 files")
-    dest_path = Path(dest_path)
-    dest_path.mkdir(exist_ok=True, parents=True)
-
-    files_nc4 = []
-    for fp in tqdm(fps_src):
-        ds_src = xr.open_dataset(fp, decode_times=False)
-        fp_dst = dest_path / fp.name
-        if not fp_dst.exists():
-            ds_src.to_netcdf(fp_dst)
-        files_nc4.append(fp_dst)
-    return files_nc4
+def _subset_id(subset):
+    return f"{subset[0]}_{subset[1]}"
 
 
-def _create_singlefile_zarr_jsons(path_src_jsons, fps_nc_files, is_netcdf4=False):
+def _drop_nonsplit_dims(dims):
+    return [d for d in dims if d != "time" and not d.startswith("z")]
+
+
+def filter_chunks(refs, concat_dims):
+    vars_to_keep = []
+
+    for key, values in refs["refs"].items():
+        if key.endswith("/.zattrs"):
+            name, _ = key.split("/")
+            if "_ARRAY_DIMENSIONS" in values:
+                d = ujson.loads(values)
+                dims = d["_ARRAY_DIMENSIONS"]
+                var_concat_dims = frozenset(_drop_nonsplit_dims(dims))
+                n_concat_dims = len(var_concat_dims)
+                if n_concat_dims == 2:
+                    if var_concat_dims == set(concat_dims):
+                        vars_to_keep.append(name)
+                elif n_concat_dims == 1:
+                    if list(var_concat_dims)[0] in concat_dims:
+                        vars_to_keep.append(name)
+                else:
+                    vars_to_keep.append(name)
+
+    filtered_refs = {}
+    for k, v in refs.items():
+        if k != "refs":
+            filtered_refs[k] = v
+        else:
+            filtered_refs[k] = {}
+            for key, value in refs["refs"].items():
+                if "/" in key:
+                    name, _ = key.split("/")
+                    if name in vars_to_keep:
+                        filtered_refs[k][key] = value
+                else:
+                    filtered_refs[k][key] = value
+
+    return filtered_refs
+
+
+def _create_singlefile_zarr_jsons(path_src_jsons, fps_nc_files, is_netcdf4, subset):
     logger.info("Creating JSON file for each individual source NetCDF file")
     path_src_jsons = Path(path_src_jsons)
     path_src_jsons.mkdir(exist_ok=True, parents=True)
@@ -51,9 +81,13 @@ def _create_singlefile_zarr_jsons(path_src_jsons, fps_nc_files, is_netcdf4=False
                 h5chunks = SingleHdf5ToZarr(infile, str(fp), inline_threshold=300)
             else:
                 h5chunks = NetCDF3ToZarr(str(fp))
-            outf = f"{fp.name}.json"
+            outf = f"{fp.name}.{_subset_id(subset)}.json"
+
+            refs = h5chunks.translate()
+            # TODO: filter refs by subset
+            filtered_refs = filter_chunks(refs=refs, concat_dims=subset)
             with fs.open(outf, "wb") as f:
-                f.write(ujson.dumps(h5chunks.translate()).encode())
+                f.write(ujson.dumps(filtered_refs).encode())
             return Path(fs.path) / outf
 
     files = fps_nc_files
@@ -73,19 +107,13 @@ def _open_single_json(filepath):
     return ds
 
 
-def _multizarr_to_zarr(json_single_fps, dest_fpath_json):
+def _multizarr_to_zarr(json_single_fps, dest_fpath_json, concat_dims):
     """
     Create a single json-description for a zarr-container (`dest_fpath_json`)
     from json-files for individual zarr files (`json_single_fps`)
     """
     logger.info(f"Writing single-file json zarr descriptor to `{dest_fpath_json}`")
-    mzz = MultiZarrToZarr(
-        json_single_fps,
-        concat_dims=[
-            "xt",
-            "yt",
-        ],
-    )
+    mzz = MultiZarrToZarr(json_single_fps, concat_dims=concat_dims)
 
     mzz.translate(dest_fpath_json)
 
@@ -105,21 +133,21 @@ def _read_multizarr(rpath):
 def _find_source_files(fp_source_data, data_kind, exp_name):
     if data_kind == "3d":
         fps_src = list(fp_source_data.glob(f"{exp_name}.????????.nc"))
-    elif data_kind == "3d__first_10x10":
-        fps_src = list(fp_source_data.glob(f"{exp_name}.000?000?.nc"))
+    elif data_kind == "3d__first_2x3":
+        fps_src = list(fp_source_data.glob(f"{exp_name}.000[0-1]000[0-2].nc"))
     elif data_kind in ["xy", "xz", "yz"]:
         fps_src = list(fp_source_data.glob(f"{exp_name}.out.{data_kind}.????.????.nc"))
     elif data_kind == "xy__first_10x10":
-        fps_src = list(fp_source_data.glob(f"{exp_name}.out.xy.000?.000?.nc"))
+        fps_src = list(fp_source_data.glob(f"{exp_name}.out.xy.000[0-1].000[0-2].nc"))
     else:
         raise NotImplementedError(data_kind)
 
-    logger.info(f"Found {len(fps_src)} soure files")
+    logger.info(f"Found {len(fps_src)} source files")
 
     return fps_src
 
 
-def main(fp_source_data, exp_name, data_kind, convert_to_nc4=False):
+def main(fp_source_data, exp_name, data_kind):
     fp_source_data = Path(fp_source_data, data_kind=data_kind)
     fp_dest_data = fp_source_data.parent / (fp_source_data.name + "__zarr")
 
@@ -128,16 +156,7 @@ def main(fp_source_data, exp_name, data_kind, convert_to_nc4=False):
     )
 
     dirname_src_jsons = f"src_jsons__{data_kind}"
-    if convert_to_nc4:
-        dirname_src_jsons += "_nc4"
-
     fp_src_jsons = fp_dest_data / dirname_src_jsons
-    if convert_to_nc4:
-        fps_src_ready = _convert_nc3_to_nc4(
-            fps_src=fps_src, dest_path=fp_dest_data / f"{data_kind}_nc4"
-        )
-    else:
-        fps_src_ready = fps_src
 
     try:
         h5py.File(fps_src[0], "r")
@@ -145,18 +164,41 @@ def main(fp_source_data, exp_name, data_kind, convert_to_nc4=False):
     except OSError:
         is_netcdf4 = False
 
-    fps_src_jsons = _create_singlefile_zarr_jsons(
-        path_src_jsons=fp_src_jsons,
-        fps_nc_files=fps_src_ready,
-        is_netcdf4=is_netcdf4,
-    )
+    if data_kind.startswith("3d"):
+        subsets = [("xt", "yt"), ("xt", "ym"), ("xm", "yt")]
+    else:
+        subsets = [("xt", "yt")]
 
-    # check we can open one of the single-file jsons without issue
-    _open_single_json(filepath=fps_src_jsons[0])
+    datasets = []
+    for subset in tqdm(subsets, desc="Creating zarr files"):
+        fps_src_jsons = _create_singlefile_zarr_jsons(
+            path_src_jsons=fp_src_jsons,
+            fps_nc_files=fps_src,
+            is_netcdf4=is_netcdf4,
+            subset=subset,
+        )
 
-    fp_dest_json = fp_dest_data / f"{exp_name}.json"
-    _multizarr_to_zarr(json_single_fps=fps_src_jsons, dest_fpath_json=fp_dest_json)
+        fps_src_jsons = sorted(fps_src_jsons)
 
-    # attempt to read the final json-file which describes all the source netcdf files
-    ds = _read_multizarr(rpath=fp_dest_json)
+        # check we can open one of the single-file jsons without issue
+        _open_single_json(filepath=fps_src_jsons[0])
+
+        fp_dest_json = fp_dest_data / f"{exp_name}.{subset}.json"
+        _multizarr_to_zarr(
+            json_single_fps=[str(fp) for fp in fps_src_jsons],
+            dest_fpath_json=fp_dest_json,
+            concat_dims=subset,
+        )
+
+        # attempt to read the final json-file which describes all the source netcdf files
+        ds = _read_multizarr(rpath=fp_dest_json)
+
+        datasets.append(ds)
+
+    if len(datasets) == 1:
+        ds = datasets[0]
+    else:
+        ds = xr.merge(datasets, compat="override")
+
     logger.info(ds)
+    return ds

@@ -1,0 +1,39 @@
+[project]
+name = "uclales_zarr"
+version = "0.1.0"
+description = "zarr-descriptor writer for UCLALES model output"
+authors = [
+    {name = "Leif Denby", email = "lcd@dmi.dk"},
+]
+dependencies = [
+    "setuptools>=69.1.0",
+    "kerchunk>=0.2.3",
+    "dask",
+    "fsspec>=0.0.7",
+    "loguru",
+    "netcdf4",
+    "tqdm",
+    "ujson",
+    "xarray",
+    "h5py>=3.10.0",
+    "scipy>=1.12.0",
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = {text = "MIT"}
+
+[project.urls]
+Homepage = "https://github.com/leifdenby/uclales_zarr"
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+dev = [
+    "ipython",
+    "pytest>=8.0.0",
+    "pre-commit>=3.6.1",
+]
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
